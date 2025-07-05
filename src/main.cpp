@@ -4,26 +4,100 @@
 
 using json = nlohmann::json;
 
-json decode_encoded_value(const std::string& encoded_value) {
-    if (std::isdigit(encoded_value[0])) {
-        // Basically, The Binary Encoding(bencode) of string looks like "<length>:<string>" ("5:pavan", ie it starts with a number).
-        // so, we decode it as "5:pavan" -> "pavan"
-        size_t colon_index = encoded_value.find(':');
-        if (colon_index != std::string::npos) {
-            std::string number_string = encoded_value.substr(0, colon_index);
-            int64_t number = std::stoll(number_string);
-            return json(encoded_value.substr(colon_index + 1, number));
-            // RVO - Return Value Optimization: instead of creating a variable to cast
-            // to another variable, we can directly pass it to constructor which creates temperory variable.
-        } else {
-            throw std::runtime_error("Invalid encoded value: " + encoded_value);
+json decode_bencoded_value(const std::string& encoded_value, size_t& index);
+
+json decode_bencoded_integer(const std::string& encoded_value, size_t& index) {
+    // In Binary Encoding(bencode), The integer value is serialized as "i<number>e"
+    // (ie. "i-52e" -Deserialization-> "-52")
+    index++; // To skip 'i'
+    std::string result = "";
+    while (encoded_value[index] != 'e') {
+        result.push_back(encoded_value[index]);
+        index++;
+    }
+    index++; // To skip 'e'
+
+    return json(std::atoll(result.c_str()));
+}
+
+json decode_bencoded_string(const std::string& encoded_value, size_t& index) {
+    // The Binary Encoding(bencode) of string looks like "<length>:<string>" ("5:pavan", ie it starts with a number).
+    // so, we decode it as "5:pavan" -> "pavan"
+    int length = 0;
+    while (encoded_value[index] >= '0' && encoded_value[index] <= '9') {
+        length = length * 10 + (encoded_value[index] - '0');
+        index++;
+    }
+    index++; // to skip colon ':'
+    std::string result("");
+    while (length--) {
+        result.push_back(encoded_value[index]);
+        index++;
+    }
+
+    return json(result);
+}
+
+json decode_bencoded_list(const std::string& encoded_value, size_t& index) {
+    // The Binary Encoding of list looks like:
+    // l<item1><item2>...e
+    // Note: here each item can be a string or integer.
+    index++; // To skip 'l'
+    json list = json::array(); // for lists
+    while (encoded_value[index] != 'e') {
+        list.push_back(decode_bencoded_value(encoded_value, index));
+    }
+    index++; // To skip 'e'
+    
+    return list;
+}
+
+json decode_bencoded_dict(const std::string& encoded_value, size_t& index) {
+    // The Binary Encoding of Dictionary looks like:
+    // d<key1><value1><key2><value2>...e
+    // constraints: 
+    // i. keys should be strings (ie. can't be integers, dictionaries)
+    // ii. keys should be lexicographilly sorted (ensures everyone encodes same data same way).
+    // reason behind sorting keys while encoding is:
+    // In systems like BitTorrent, the actual bencoded value is hashed. if the keys are not sorted, the data
+    // would be logically equivalent but not equal interms of hash.
+    index++; // To skip 'd'
+    json dict = json::object(); // for Dictionaries / maps
+    while (encoded_value[index] != 'e') {
+        json key = decode_bencoded_value(encoded_value, index);
+        if (!key.is_string()) {
+            throw std::runtime_error("Bencode dictionary key is not a string!");
         }
-    } else if (encoded_value[0] == 'i' && encoded_value.back() == 'e') {
-        // Similarlly, the integer value is serialized as "i<number>e" (ie. "i-52e" -Deserialization-> "-52")
-        return json(std::stoll(encoded_value.substr(1, encoded_value.size() - 2)));
+        json value = decode_bencoded_value(encoded_value, index);
+        dict[key] = value;
+    }
+    index++; // To skip 'e'
+
+    return dict;
+}
+
+json decode_bencoded_value(const std::string& encoded_value, size_t& index) {
+    if (encoded_value[index] == 'i') {
+        return decode_bencoded_integer(encoded_value, index);
+    } else if (std::isdigit(encoded_value[index])) {
+        return decode_bencoded_string(encoded_value, index);
+    } else if (encoded_value[index] == 'l') {
+        return decode_bencoded_list(encoded_value, index);
+    } else if (encoded_value[index] == 'd') {
+        return decode_bencoded_list(encoded_value, index);
     } else {
         throw std::runtime_error("Unhandled encoded value: " + encoded_value);
     }
+}
+
+json decode_bencoded_value(const std::string& encoded_value) {
+    size_t index = 0;
+    json result = decode_bencoded_value(encoded_value, index);
+    if (index != encoded_value.size()) {
+        throw std::runtime_error("String not fully consumed.");
+    }
+
+    return result;
 }
 
 int main(int argc, char* argv[]) {
@@ -44,7 +118,7 @@ int main(int argc, char* argv[]) {
         }
 
         std::string encoded_value = argv[2];
-        json decoded_value = decode_encoded_value(encoded_value);
+        json decoded_value = decode_bencoded_value(encoded_value);
         std::cout << decoded_value.dump() << std::endl;
     } else {
         std::cerr << "Unknown Command: " << command << std::endl;
