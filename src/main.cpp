@@ -1,4 +1,6 @@
 #include <iostream>
+#include <fstream>
+#include <filesystem>
 
 #include "lib/nlohmann/json.hpp"
 
@@ -49,7 +51,7 @@ json decode_bencoded_list(const std::string& encoded_value, size_t& index) {
     }
     index++; // To skip 'e'
     
-    return list;
+    return json(list);
 }
 
 json decode_bencoded_dict(const std::string& encoded_value, size_t& index) {
@@ -73,7 +75,7 @@ json decode_bencoded_dict(const std::string& encoded_value, size_t& index) {
     }
     index++; // To skip 'e'
 
-    return dict;
+    return json(dict);
 }
 
 json decode_bencoded_value(const std::string& encoded_value, size_t& index) {
@@ -84,7 +86,7 @@ json decode_bencoded_value(const std::string& encoded_value, size_t& index) {
     } else if (encoded_value[index] == 'l') {
         return decode_bencoded_list(encoded_value, index);
     } else if (encoded_value[index] == 'd') {
-        return decode_bencoded_list(encoded_value, index);
+        return decode_bencoded_dict(encoded_value, index);
     } else {
         throw std::runtime_error("Unhandled encoded value: " + encoded_value);
     }
@@ -97,7 +99,7 @@ json decode_bencoded_value(const std::string& encoded_value) {
         throw std::runtime_error("String not fully consumed.");
     }
 
-    return result;
+    return json(result);
 }
 
 int main(int argc, char* argv[]) {
@@ -120,6 +122,21 @@ int main(int argc, char* argv[]) {
         std::string encoded_value = argv[2];
         json decoded_value = decode_bencoded_value(encoded_value);
         std::cout << decoded_value.dump() << std::endl;
+    } else if (command == "info") {
+        if (argc < 3) {
+            std::cerr << "Usage: " << argv[0] << " info <file_name>" << std::endl;
+        }
+
+        std::string file_name = argv[2];
+        std::ifstream file(file_name, std::ios::binary); // since, the encoding is Binary Encoding(Bencode).
+        std::filesystem::path p{argv[2]};
+        std::string info(std::filesystem::file_size(p), '?');
+        // to allocate buffer of exact size needed to read the file.
+        file.read(info.data(), std::filesystem::file_size(p));
+        json torrent_info = decode_bencoded_value(info);
+        
+        std::cout << "Tracker URL: " << torrent_info["announce"].dump().substr(1, torrent_info["announce"].dump().size() - 2) << std::endl;
+        std::cout << "Length: " << torrent_info["info"]["length"].dump() << std::endl;
     } else {
         std::cerr << "Unknown Command: " << command << std::endl;
         return 1;
